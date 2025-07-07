@@ -5,41 +5,39 @@
 [![Written in typescript](https://img.shields.io/badge/written_in-typescript-blue.svg?style=flat-square)](https://www.typescriptlang.org/)
 [![npm](https://img.shields.io/npm/v/cachalot.svg?style=flat-square)](https://www.npmjs.com/package/cachalot)
 
-Zero-dependency library designed to cache query results. Features:
-* Implements popular caching strategies (Read-Through, Write-Through, Refresh-Ahead), and also allows them to be combined
-* Defines an adapter interface that allows you to use it with any key-value storage for which the corresponding adapter is written
-* Comes with adapter for redis, memcached
-* Allows to use prefixes for keys, automatic hashing
-* Allows to pass in a logger that will be used to display informational messages and errors
-* Supports various behaviors of cache write waiting (heavy queries), more details below.
+Zero-dependency library designed to cache query results with advanced caching strategies and multi-level support.
 
-### Getting started
+## Features
 
-To initialize Cache instance, you need:
-* StorageAdapter (in the example below, an adapter for connecting to redis). RedisStorageAdapter takes as an argument the instance of ioredis client.
-* Settings object. The options are the following options:
-  
-   - prefix - prefix used by CacheManager for storing keys. In essence, this is the namespace for a specific CacheManager.
-  
-   - logger - instance of logger. Must implement following interface:
+* **Multiple Caching Strategies**: Read-Through, Write-Through, Refresh-Ahead, Multi-Level
+* **Bloom Filter Support**: Reduce cache misses with probabilistic data structures
+* **Flexible Storage**: Adapters for Redis, Memcached, and custom storage
+* **Key Management**: Prefixes, automatic hashing, and tag-based invalidation
+* **Comprehensive Logging**: Built-in logging support for monitoring and debugging
+* **Locked Key Strategies**: Configurable behavior for concurrent access
+* **Metrics Support**: Track performance and usage patterns
 
-    ```typescript
-    interface Logger {
-      info(...args: any[]): void;
-      trace(...args: any[]): void;
-      warn(...args: any[]): void;
-      error(...args: any[]): void;
-    }
-    ```
-   - expiresIn - the time after which the keys lose relevance (ms)
+## Table of Contents
 
-##### Example of use:
+- [Getting Started](#getting-started)
+- [Caching Strategies](#caching-strategies)
+  - [Read-Through](#read-through)
+  - [Write-Through](#write-through)
+  - [Refresh-Ahead](#refresh-ahead)
+  - [Multi-Level](#multi-level)
+- [Advanced Features](#advanced-features)
+  - [Bloom Filters](#bloom-filters)
+  - [Metrics](#metrics)
+  - [Locked Key Strategies](#locked-key-strategies)
+- [Storage Adapters](#storage-adapters)
+- [API Reference](#api-reference)
+- [Real-World Integrations](#real-world-integrations)
 
-Initialization:
+## Getting Started
+
+### Basic Setup
 
 ```typescript
-// cache.ts
-
 import Redis from 'ioredis';
 import Cache, { RedisStorageAdapter } from 'cachalot';
 import logger from './logger';
@@ -49,176 +47,534 @@ const redis = new Redis();
 export const cache = new Cache({
   adapter: new RedisStorageAdapter(redis),
   logger,
-});
-```
-If your Redis instance uses eviction policy you need to use separate Redis instance for tags. **Tags should not be evicted!**
-
-```typescript
-// cache-with-tags.ts
-
-import Redis from 'ioredis';
-import Cache, { RedisStorageAdapter } from 'cachalot';
-import logger from './logger';
-
-const redis = new Redis(); // with eviction policy enabled
-const redisForTags = new Redis(6380);
-
-export const cache = new Cache({
-  adapter: new RedisStorageAdapter(redis),
-  tagsAdapter: new RedisStorageAdapter(redisForTags),
-  logger,
+  expiresIn: 3600000, // 1 hour default TTL
+  prefix: 'myapp',    // Optional key prefix
 });
 ```
 
-There are three main methods of working with Cache; their behavior depends on the chosen caching strategy:
+### Logger Interface
 
-`get` gets cache data
+Your logger must implement this interface:
 
 ```typescript
-// get-something.ts
-import { cache } from './cache'
-
-const cacheKey = 'something:id100'; // key that records and accesses the value
-
-function getSomething() {
-  return cache.get(
-      cacheKey,
-      () => executor('hello', 'world'), // executor is a function that returns promise. Run if failed to get valid cache entry
-      { tags: [cacheKey, 'something'] }, // you can associate tags with any cache record. You can later invalidate record with any of them.
-    );
+interface Logger {
+  info(...args: any[]): void;
+  trace(...args: any[]): void;
+  warn(...args: any[]): void;
+  error(...args: any[]): void;
 }
 ```
 
-`get` will check the tags and compare their versions with the current date, runs an executor if necessary and returns result.
-Options for `get`:
-- expiresIn?: number; - The number of milliseconds after which key values are considered expired
-- tags?: string[] | (() => string[]) - Tags - keys for which checks the validity of a particular record. If the tag value in the cache + invalidation time is <the current time, then the tag will be considered invalid and the record will need to be obtained using the executor. Can be calculated lazy.
-- getTags?: (executorResult) => string[] function which extracts tags from executor result. These tags will be merged with tags given in option below.
-
-The next method, "touch", serves to invalidate tags. Calling this method with one of the tags will make all records in the cache with this tag invalid.
-It can be used both to invalidate a single record (for example, by creating a unique id) or a group of records.
-
-Example:
-```typescript
-import { cache } from './cache'
-
-async function createSomething() {
-  await cache.touch(['something']) // invalidates all entries with the tag "something"
-}
-```
-The latter method is `set`, used in write-through strategies to update entries.
-
-Note that `touch` does not make sense when using Write-Through in its pure form, just as there is no point in using set in the Refresh-Ahead and Read-Through strategies
-
-## Locked key retrieve strategies
-
-Cachalot allows you to set a strategy for `get` behavior if the cache entry is locked (for updating). Available strategies:
-
-`waitForResult` -` get` will wait for the result to appear in the cache and the lock will be removed. Good to use with heavy demands and average load
-. Under high loads, spikes can occur due to queuing requests.
-
-`runExecutor` -` get` will immediately call the executor and return its result. Good in cases where requests are light. The disadvantage of
-this strategy is a temporary increase in the load on the database at the time of updating the record. This strategy is used by default.
-
-For each entry, the strategy can be set individually. To do this, its name must be passed in the readThrough options.
-```typescript
-cache.get('something:id100', () => executor('hello', 'world'), {
-    tags: [cacheKey, 'something'],
-    lockedKeyRetrieveStrategy: 'runExecutor'
-  },
-);
-```
-### Cache Managers
-
-For all the examples above, the Refresh-Ahead strategy is used. This strategy is used by default, but it is possible to connect other strategies from cachalot.
-Different caching strategies implement different classes of "managers". Each manager has a string identifier.
-When registering a strategy, it is obtained by calling the getName static method of the manager class. Further, the same identifier can be used
-in get and set calls to tell the Cache instance to which manager to delegate the call.
-
-#### Refresh-Ahead
-
-The Refresh-Ahead Cache strategy allows the developer to configure the cache to automatically and asynchronously reload (refresh) any recently available cache entry from the cache loader before it expires. As a result, after a frequently used entry entered the cache, the application will not sense the effect of reading on the potentially slow cache storage when the entry is reloaded due to expiration. An asynchronous update is launched only when accessing an object close enough to its expiration time — if the object is accessed after it has expired, Cache will perform a synchronous read from the cache storage to update its value.
-
-The refresh ahead factor is expressed as a percentage of the record expiration time. For example, suppose that the expiration time for entries in the cache is set to 60 seconds, and refresh ahead factor is set to 0.5. If the cached object is accessed after 60 seconds, Cache will perform a synchronous read from the cache storage to update its value. However, if the request is made for a record that is older than 30, but less than 60 seconds, the current value in the cache is returned, and Cache plans an asynchronous reboot from the cache storage.
-
-An advanced update is especially useful if objects are accessed by a large number of users. The values ​​in the cache remain fresh, and the delay that may result from an excessive reload from the cache storage is eliminated.
-
-By default, RefreshAhead is already defined in Cache with default settings. However, you can override it. To do this, simply register `RefreshAheadManager` again
+### Basic Usage
 
 ```typescript
-cache.registerManager(RefreshAheadManager, null, {
-  refreshAheadFactor: 0.5,
-});
-```
-#### Read-Through
-
-When an application requests an entry in the cache, for example, the X key, and X is not yet in the cache, Cache will automatically call executor, which loads X from the underlying data source. If X exists in the data source, executor loads it, returns it to Cache, then Cache puts it in the cache for future use and finally returns X to the application code that requested it. This is called read-through caching. Advanced caching functionality (Refresh-Ahead) can further improve read performance (by reducing the estimated latency).
-
-```typescript
-import Redis from 'ioredis';
-import logger from './logger';
-import Cache, { RedisStorageAdapter, ReadThroughManager } from 'cachalot'; // constructor adapter for redis
-
-const redis = new Redis();
-
-export const cache = new Cache({
-  adapter: new RedisStorageAdapter(redis),
-  logger,
+// Simple cache get with executor
+const user = await cache.get('user:123', async () => {
+  return await fetchUserFromDatabase(123);
 });
 
+// With tags for invalidation
+const user = await cache.get('user:123', async () => {
+  return await fetchUserFromDatabase(123);
+}, {
+  tags: ['user:123', 'users'],
+  expiresIn: 1800000, // 30 minutes
+});
+
+// Invalidate by tag
+await cache.touch(['users']); // Invalidates all user records
+```
+
+## Caching Strategies
+
+### Read-Through
+
+**Best for**: Read-heavy applications, when you want automatic cache population on misses.
+
+Read-Through automatically loads data from the data source when it's not in cache.
+
+```typescript
+import { ReadThroughManager } from 'cachalot';
+
+// Register the manager
 cache.registerManager(ReadThroughManager);
 
-// ...
-const x = await cache.get('something:id100', () => executor('hello', 'world'), {
-    tags: [cacheKey, 'something'],
-    manager: 'read-through',
-  },
-);
+// Use it
+const user = await cache.get('user:123', async () => {
+  return await fetchUserFromDatabase(123);
+}, {
+  manager: 'read-through',
+  tags: ['user:123', 'users']
+});
 ```
-#### Write-Through
 
-With Write-Through, get causes no validation logic for the cache, tags, and so on. A record is considered invalid only if it is not in the cache as such. In this strategy, when an application updates a portion of the data in the cache (that is, calls set (...) to change the cache entry), the operation will not complete (that is, set will not return) until the Cache has passed through the underlying database and successfully saved data to the underlying data source. This does not improve write performance at all, since you are still dealing with a delay in writing to the data source.
+**Use Cases**:
+- User profiles and preferences
+- Product catalogs
+- Configuration data
+- Frequently accessed reference data
 
-#### Read-Through + Write-Through
+### Write-Through
 
-It is also possible to combine different strategies, the most common option is Read-Through + Write-Through.
+**Best for**: Write-heavy applications requiring strong consistency.
+
+Write-Through ensures data is written to both cache and data source simultaneously.
 
 ```typescript
-// ...
-export const cache = new Cache({
-  adapter: new RedisStorageAdapter(redisClient),
-  logger,
-});
+import { WriteThroughManager } from 'cachalot';
 
-cache.registerManager(ReadThroughManager);
 cache.registerManager(WriteThroughManager);
 
-// creates permanent record
-cache.set('something:id100', 'hello', {
-  tags: ['something:id100', 'something'],
-  manager: WriteThroughManager.getName()
+// Write data (creates permanent cache entry)
+await cache.set('user:123', userData, {
+  manager: 'write-through',
+  tags: ['user:123', 'users']
 });
 
-// gets the record
-const x = await cache.get('something:id100', () => executor('hello', 'world'), {
-    tags: ['something:id100', 'something'],
-    manager: ReadThroughManager.getName(),
+// Read (no validation, returns what's in cache)
+const user = await cache.get('user:123', async () => {
+  return await fetchUserFromDatabase(123);
+}, {
+  manager: 'write-through'
+});
+```
+
+**Use Cases**:
+- User registration/updates
+- Order processing
+- Financial transactions
+- Any write-heavy workload
+
+### Refresh-Ahead
+
+**Best for**: High-traffic applications where you want to avoid cache expiration spikes.
+
+Refresh-Ahead proactively refreshes cache entries before they expire.
+
+```typescript
+import { RefreshAheadManager } from 'cachalot';
+
+// Register with custom refresh factor (0.8 = refresh when 80% of TTL remains)
+cache.registerManager(RefreshAheadManager, null, {
+  refreshAheadFactor: 0.8,
+});
+
+// Use it
+const user = await cache.get('user:123', async () => {
+  return await fetchUserFromDatabase(123);
+}, {
+  manager: 'refresh-ahead',
+  tags: ['user:123', 'users']
+});
+```
+
+**Use Cases**:
+- High-traffic websites
+- API endpoints with predictable access patterns
+- Real-time dashboards
+- Content delivery networks
+
+### Multi-Level
+
+**Best for**: Performance-critical applications requiring multiple cache tiers.
+
+Multi-Level supports multiple cache levels (e.g., L1: Memory, L2: Redis, L3: Database).
+
+```typescript
+import { MultiLevelManager } from 'cachalot';
+import { RedisStorageAdapter } from 'cachalot';
+
+// Create different storage adapters
+const memoryStorage = new InMemoryStorageAdapter();
+const redisStorage = new RedisStorageAdapter(redis);
+
+// Configure multi-level cache
+const multiLevelManager = new MultiLevelManager({
+  levels: [
+    {
+      name: 'L1-Memory',
+      storage: memoryStorage,
+      priority: 1, // Checked first
+      ttl: 60000,  // 1 minute
+      enabled: true,
+    },
+    {
+      name: 'L2-Redis',
+      storage: redisStorage,
+      priority: 2, // Checked second
+      ttl: 3600000, // 1 hour
+      enabled: true,
+    },
+  ],
+  logger,
+  storage: memoryStorage, // Fallback storage
+  fallbackStrategy: 'executor', // 'executor' | 'next-level' | 'fail'
+  enableBloomFilter: true,
+  bloomFilterOptions: {
+    expectedElements: 10000,
+    falsePositiveRate: 0.01,
   },
-);
+});
+
+// Register the manager
+cache.registerManager(multiLevelManager, 'multi-level');
+
+// Use it
+const user = await cache.get('user:123', async () => {
+  return await fetchUserFromDatabase(123);
+}, {
+  manager: 'multi-level',
+  tags: ['user:123', 'users']
+});
+
+// Get metrics
+const metrics = multiLevelManager.getMetrics();
+console.log('Cache hits by level:', metrics);
 ```
-## License
 
+**Use Cases**:
+- High-performance applications
+- Microservices with shared caching
+- Applications with mixed access patterns
+- Systems requiring both speed and persistence
+
+## Advanced Features
+
+### Bloom Filters
+
+Bloom filters can significantly reduce cache misses by providing fast negative lookups.
+
+```typescript
+// Enable Bloom filter globally
+const cache = new Cache({
+  adapter: new RedisStorageAdapter(redis),
+  logger,
+  enableBloomFilter: true,
+  bloomFilterOptions: {
+    expectedElements: 10000,  // Expected number of unique keys
+    falsePositiveRate: 0.01,  // 1% false positive rate
+  },
+});
+
+// Or enable per-manager
+cache.registerManager(ReadThroughManager, null, {
+  enableBloomFilter: true,
+  bloomFilterOptions: {
+    expectedElements: 5000,
+    falsePositiveRate: 0.05,
+  },
+});
 ```
-Copyright 2019 Tinkoff Bank
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+**Benefits**:
+- Reduces unnecessary storage calls
+- Improves performance for cache misses
+- Minimal memory overhead
+- Configurable accuracy vs. memory trade-off
 
-   http://www.apache.org/licenses/LICENSE-2.0
+### Metrics
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+Track cache performance and usage patterns.
+
+```typescript
+// Get metrics from Multi-Level Manager
+const metrics = multiLevelManager.getMetrics();
+console.log(metrics);
+// Output:
+// {
+//   "L1-Memory": { hits: 150, misses: 10, sets: 160, dels: 5 },
+//   "L2-Redis": { hits: 45, misses: 25, sets: 70, dels: 3 }
+// }
+
+// Get level statistics
+const stats = multiLevelManager.getLevelStats();
+console.log(stats);
+// Output:
+// [
+//   { name: "L1-Memory", enabled: true, priority: 1 },
+//   { name: "L2-Redis", enabled: true, priority: 2 }
+// ]
+```
+
+### Locked Key Strategies
+
+Configure behavior when cache entries are locked for updates.
+
+```typescript
+// Wait for result (good for heavy queries)
+const user = await cache.get('user:123', async () => {
+  return await heavyDatabaseQuery(123);
+}, {
+  lockedKeyRetrieveStrategy: 'waitForResult',
+  tags: ['user:123']
+});
+
+// Run executor immediately (good for light queries)
+const user = await cache.get('user:123', async () => {
+  return await lightDatabaseQuery(123);
+}, {
+  lockedKeyRetrieveStrategy: 'runExecutor',
+  tags: ['user:123']
+});
+```
+
+## Storage Adapters
+
+### Redis Adapter
+
+```typescript
+import { RedisStorageAdapter } from 'cachalot';
+
+const redis = new Redis({
+  host: 'localhost',
+  port: 6379,
+});
+
+const cache = new Cache({
+  adapter: new RedisStorageAdapter(redis),
+  logger,
+});
+```
+
+### Memcached Adapter
+
+```typescript
+import { MemcachedStorageAdapter } from 'cachalot';
+import Memcached from 'memcached';
+
+const memcached = new Memcached('localhost:11211');
+
+const cache = new Cache({
+  adapter: new MemcachedStorageAdapter(memcached),
+  logger,
+});
+```
+
+### Custom Storage Adapter
+
+```typescript
+import { StorageAdapter } from 'cachalot';
+
+class CustomStorageAdapter implements StorageAdapter {
+  async get(key: string): Promise<string | null> {
+    // Your implementation
+  }
+  
+  async set(key: string, value: string, options?: any): Promise<void> {
+    // Your implementation
+  }
+  
+  async del(key: string): Promise<boolean> {
+    // Your implementation
+  }
+  
+  // ... other required methods
+}
+
+const cache = new Cache({
+  adapter: new CustomStorageAdapter(),
+  logger,
+});
+```
+
+## API Reference
+
+### Cache Options
+
+```typescript
+interface CacheOptions {
+  adapter: StorageAdapter;
+  tagsAdapter?: StorageAdapter;
+  logger: Logger;
+  expiresIn?: number;
+  prefix?: string;
+  hashKeys?: boolean;
+  enableBloomFilter?: boolean;
+  bloomFilterOptions?: {
+    expectedElements?: number;
+    falsePositiveRate?: number;
+  };
+}
+```
+
+### Get Options
+
+```typescript
+interface GetOptions {
+  expiresIn?: number;
+  tags?: string[] | (() => string[]);
+  manager?: string;
+  lockedKeyRetrieveStrategy?: 'waitForResult' | 'runExecutor';
+}
+```
+
+### Set Options
+
+```typescript
+interface SetOptions {
+  expiresIn?: number;
+  tags?: string[] | (() => string[]);
+  manager?: string;
+  permanent?: boolean;
+}
+```
+
+## Best Practices
+
+### 1. Choose the Right Strategy
+
+- **Read-Through**: For read-heavy workloads
+- **Write-Through**: For write-heavy workloads requiring consistency
+- **Refresh-Ahead**: For high-traffic applications
+- **Multi-Level**: For performance-critical applications
+
+### 2. Configure Bloom Filters
+
+- Use for applications with many cache misses
+- Set `expectedElements` based on your key space
+- Balance `falsePositiveRate` vs. memory usage
+
+### 3. Monitor Performance
+
+- Use metrics to track cache hit rates
+- Monitor Bloom filter effectiveness
+- Set appropriate TTLs per data type
+
+### 4. Handle Errors Gracefully
+
+```typescript
+try {
+  const data = await cache.get('key', async () => {
+    return await fetchData();
+  });
+} catch (error) {
+  // Handle cache errors gracefully
+  console.error('Cache error:', error);
+  // Fallback to direct data source
+  return await fetchData();
+}
+```
+
+### 5. Use Tags for Invalidation
+
+```typescript
+// Cache user data with tags
+await cache.get('user:123', fetchUser, {
+  tags: ['user:123', 'users', 'premium-users']
+});
+
+// Invalidate specific user
+await cache.touch(['user:123']);
+
+// Invalidate all users
+await cache.touch(['users']);
+
+// Invalidate premium users
+await cache.touch(['premium-users']);
+```
+
+## Real-World Integrations
+
+For comprehensive real-world integration examples with popular libraries and frameworks, see [Real-World Integrations Guide](docs/REAL_WORLD_INTEGRATIONS.md).
+
+## Examples
+
+### E-commerce Application
+
+```typescript
+// Product catalog with multi-level caching
+const productCache = new Cache({
+  adapter: new RedisStorageAdapter(redis),
+  logger,
+  enableBloomFilter: true,
+});
+
+// Register multi-level manager
+const multiLevelManager = new MultiLevelManager({
+  levels: [
+    { name: 'L1-Memory', storage: memoryStorage, priority: 1, ttl: 300000, enabled: true },
+    { name: 'L2-Redis', storage: redisStorage, priority: 2, ttl: 3600000, enabled: true },
+  ],
+  logger,
+  storage: memoryStorage,
+  enableBloomFilter: true,
+});
+
+productCache.registerManager(multiLevelManager, 'product-cache');
+
+// Cache product data
+const product = await productCache.get(`product:${id}`, async () => {
+  return await fetchProductFromDatabase(id);
+}, {
+  manager: 'product-cache',
+  tags: [`product:${id}`, 'products', category],
+});
+
+// Invalidate when product is updated
+await productCache.touch([`product:${id}`, category]);
+```
+
+### User Session Management
+
+```typescript
+// User sessions with write-through
+const sessionCache = new Cache({
+  adapter: new RedisStorageAdapter(redis),
+  logger,
+});
+
+sessionCache.registerManager(WriteThroughManager);
+
+// Store session data
+await sessionCache.set(`session:${sessionId}`, sessionData, {
+  manager: 'write-through',
+  tags: [`session:${sessionId}`, 'sessions', `user:${userId}`],
+  permanent: true,
+});
+
+// Retrieve session
+const session = await sessionCache.get(`session:${sessionId}`, async () => {
+  return await fetchSessionFromDatabase(sessionId);
+}, {
+  manager: 'write-through',
+});
+
+// Invalidate user sessions
+await sessionCache.touch([`user:${userId}`]);
+```
+
+### API Rate Limiting
+
+```typescript
+// Rate limiting with refresh-ahead
+const rateLimitCache = new Cache({
+  adapter: new RedisStorageAdapter(redis),
+  logger,
+});
+
+rateLimitCache.registerManager(RefreshAheadManager, null, {
+  refreshAheadFactor: 0.9,
+});
+
+// Track API calls
+const rateLimit = await rateLimitCache.get(`rate:${userId}`, async () => {
+  return { calls: 0, resetTime: Date.now() + 3600000 };
+}, {
+  manager: 'refresh-ahead',
+  expiresIn: 3600000, // 1 hour
+  tags: [`rate:${userId}`],
+});
+
+if (rateLimit.calls >= 1000) {
+  throw new Error('Rate limit exceeded');
+}
+
+// Update call count
+await rateLimitCache.set(`rate:${userId}`, {
+  ...rateLimit,
+  calls: rateLimit.calls + 1,
+}, {
+  manager: 'refresh-ahead',
+  tags: [`rate:${userId}`],
+});
+```
