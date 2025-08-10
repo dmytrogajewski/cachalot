@@ -4,6 +4,14 @@ import { Record } from "./storage/Record";
 import Cache, { CacheOptions } from "./Cache";
 import RedisStorageAdapter from "./adapters/RedisStorageAdapter";
 import MemcachedStorageAdapter from "./adapters/MemcachedStorageAdapter";
+import InMemoryStorageAdapter from "./adapters/InMemoryStorageAdapter";
+import PostgreSQLStorageAdapter from "./adapters/PostgreSQLStorageAdapter";
+import MongoDBStorageAdapter from "./adapters/MongoDBStorageAdapter";
+import FilesystemStorageAdapter from "./adapters/FilesystemStorageAdapter";
+import { SQLiteStorageAdapter } from "./adapters/SQLiteStorageAdapter";
+import { HazelcastStorageAdapter } from "./adapters/HazelcastStorageAdapter";
+import { IgniteStorageAdapter } from "./adapters/IgniteStorageAdapter";
+import { EtcdStorageAdapter } from "./adapters/EtcdStorageAdapter";
 import ReadThroughManager from "./managers/ReadThroughManager";
 import WriteThroughManager from "./managers/WriteThroughManager";
 import RefreshAheadManager from "./managers/RefreshAheadManager";
@@ -17,6 +25,14 @@ export {
   Tags,
   RedisStorageAdapter,
   MemcachedStorageAdapter,
+  InMemoryStorageAdapter,
+  PostgreSQLStorageAdapter,
+  MongoDBStorageAdapter,
+  FilesystemStorageAdapter,
+  SQLiteStorageAdapter,
+  HazelcastStorageAdapter,
+  IgniteStorageAdapter,
+  EtcdStorageAdapter,
   ReadThroughManager,
   RefreshAheadManager,
   WriteThroughManager,

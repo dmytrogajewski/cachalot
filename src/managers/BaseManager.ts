@@ -13,6 +13,11 @@ export interface ManagerOptions extends ExpireOptions {
   storage: Storage;
   refreshAheadFactor?: number;
   lockedKeyRetrieveStrategies?: [string, LockedKeyRetrieveStrategy][];
+  enableBloomFilter?: boolean;
+  bloomFilterOptions?: {
+    expectedElements?: number;
+    falsePositiveRate?: number;
+  };
 }
 
 export abstract class BaseManager {

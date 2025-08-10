@@ -4,7 +4,7 @@ import { Logger } from "./Logger";
 import { Manager } from "./Manager";
 import { ManagerOptions } from "./managers/BaseManager";
 import RefreshAheadManager from "./managers/RefreshAheadManager";
-import { BaseStorage } from "./storage/BaseStorage";
+import { BaseStorage, BaseStorageOptions } from "./storage/BaseStorage";
 import { Record } from "./storage/Record";
 import { ReadWriteOptions, Storage, WriteOptions } from "./storage/Storage";
 import { StorageAdapter } from "./StorageAdapter";
@@ -27,6 +27,11 @@ export type CacheOptions = (CacheWithCustomStorageOptions | CacheWithBaseStorage
   expiresIn?: number;
   prefix?: string;
   hashKeys?: boolean;
+  enableBloomFilter?: boolean;
+  bloomFilterOptions?: {
+    expectedElements?: number;
+    falsePositiveRate?: number;
+  };
 };
 
 export const isCustomStorageOptions = (options: unknown): options is CacheWithCustomStorageOptions =>
@@ -67,12 +72,21 @@ class Cache {
     if (isCustomStorageOptions(options)) {
       this.storage = options.storage;
     } else if (isBaseStorageOptions(options)) {
-      this.storage = new BaseStorage({
+      const baseStorageOptions: BaseStorageOptions = {
         adapter: options.adapter,
-        tagsAdapter: options.tagsAdapter,
-        prefix: options.prefix,
-        hashKeys: options.hashKeys,
-      });
+      };
+      
+      if (options.tagsAdapter !== undefined) {
+        baseStorageOptions.tagsAdapter = options.tagsAdapter;
+      }
+      if (options.prefix !== undefined) {
+        baseStorageOptions.prefix = options.prefix;
+      }
+      if (options.hashKeys !== undefined) {
+        baseStorageOptions.hashKeys = options.hashKeys;
+      }
+      
+      this.storage = new BaseStorage(baseStorageOptions);
     } else {
       throw new Error("Either custom storage or storage adapter must be passed in options.");
     }
@@ -85,7 +99,16 @@ class Cache {
     this.expiresIn = options.expiresIn || EXPIRES_IN.day;
 
     this.managers = new Map();
-    this.registerManager(RefreshAheadManager);
+    const managerOptions: Partial<ManagerOptions> = {};
+    
+    if (options.enableBloomFilter !== undefined) {
+      managerOptions.enableBloomFilter = options.enableBloomFilter;
+    }
+    if (options.bloomFilterOptions !== undefined) {
+      managerOptions.bloomFilterOptions = options.bloomFilterOptions;
+    }
+    
+    this.registerManager(RefreshAheadManager, null, managerOptions);
   }
 
   private readonly storage: Storage;
